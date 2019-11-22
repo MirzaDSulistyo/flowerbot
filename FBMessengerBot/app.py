@@ -7,13 +7,29 @@ from flask import Flask, request
 import nltk
 nltk.download('punkt')
 from nltk.stem.lancaster import LancasterStemmer
-stemmer = LancasterStemmer()
+#stemmer = LancasterStemmer()
+
+# NER
+from nltk.tag.stanford import StanfordNERTagger
+jar = './stanford-ner.jar'
+model = './ner-model-indonesia.ser.gz'
+
+# Prepare NER tagger with english model
+ner_tagger = StanfordNERTagger(model, jar, encoding='utf8')
+
+# import StemmerFactory class
+from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
+
+# create stemmer
+factory = StemmerFactory()
+stemmer = factory.create_stemmer()
 
 import numpy as np
 import random
 from tensorflow import keras
 from keras.models import load_model
 
+from twilio.twiml.messaging_response import Body, Message, Redirect, MessagingResponse
 
 # import our chat-bot intents file
 import json
@@ -26,16 +42,16 @@ documents = []
 ignore_words = ['?']
 # loop through each sentence in our intents patterns
 for intent in intents['intents']:
-    for pattern in intent['patterns']:
+    for pattern in intent['utterances']:
         # tokenize each word in the sentence
         w = nltk.word_tokenize(pattern)
         # add to our words list
         words.extend(w)
         # add to documents in our corpus
-        documents.append((w, intent['tag']))
+        documents.append((w, intent['intent']))
         # add to our classes list
-        if intent['tag'] not in classes:
-            classes.append(intent['tag'])
+        if intent['intent'] not in classes:
+            classes.append(intent['intent'])
 
 # stem and lower each word and remove duplicates
 words = [stemmer.stem(w.lower()) for w in words if w not in ignore_words]
@@ -100,14 +116,24 @@ def classify(sentence):
 
 def response(sentence, userID, show_details=False):
     results = classify(sentence)
+
+    entities = nltk.word_tokenize(sentence)
+    tags = ner_tagger.tag(entities)
+
+    print(tags)
+    for t in tags:
+        if t[1] is not 'O':
+            print(t)
+
     print('Result:',results)
-    # if we have a classification then find the matching intent tag
+    print('Sentence:', sentence)
+    # if we have a classification then find the matching intent tag (intent)
     if results:
         # loop as long as there are matches to process
         while results:
             for i in intents['intents']:
-                # find a tag matching the first result
-                if i['tag'] == results[0][0]:
+                # find an intent matching the first result
+                if i['intent'] == results[0][0]:
                     # set context for this intent if necessary
                     if 'context_set' in i:
                         if show_details: print ('context:', i['context_set'])
@@ -116,10 +142,12 @@ def response(sentence, userID, show_details=False):
                     # check if this intent is contextual and applies to this user's conversation
                     if not 'context_filter' in i or \
                         (userID in context and 'context_filter' in i and i['context_filter'] == context[userID]):
-                        if show_details: print ('tag:', i['tag'])
+                        if show_details: print ('intent:', i['intent'])
                         # a random response from the intent
                         return (random.choice(i['responses']))
             results.pop(0)
+    else:
+        print('No result')
 
 app = Flask(__name__)
 
@@ -168,6 +196,45 @@ def webhook():
                     pass
 
     return "ok", 200
+
+@app.route('/webhook', methods=['POST'])
+def webhookai():
+    message = request.form['message']
+    id = request.form['id']
+
+    responseai = response(message, id)
+
+    return {'response': responseai}, 200
+
+@app.route("/twilio", methods=['GET'])
+def hello():
+    return "Hello, World!", 200
+
+@app.route('/twilio', methods=['POST'])
+def sms_reply():
+    """Respond to incoming calls with a simple text message."""
+    # Fetch the message
+    msg = request.form.get('Body')
+
+    # Create reply
+    resp = MessagingResponse()
+    resp.message("You said: {}".format(msg))
+
+    return str(resp)
+
+@app.route('/whatsapp', methods=['POST'])
+def whatsapp_reply():
+    """Respond to incoming calls with a simple text message."""
+    # Fetch the message
+    msg = request.form.get('Body')
+
+    responseai = response(msg, "123")
+
+    # Create reply
+    resp = MessagingResponse()
+    resp.message(responseai)
+
+    return str(resp)
 
 
 def send_message(recipient_id, message_text):
